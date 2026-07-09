@@ -87,7 +87,10 @@ const BLOCK_DEFS = {
     label: 'Carte',
     icon: '▣',
     defaults: () => ({ type: 'card', title: 'Titre de la carte', text: 'Description courte de la carte.', style: 'default' }),
-    render: b => `<div class="blk-card blk-card-${b.style}"><h3 class="blk-card-title">${escapeHtml(b.title)}</h3><p class="blk-card-text">${escapeHtml(b.text)}</p></div>`,
+    // fond transparent si une couleur de fond personnalisée est choisie
+    // (Apparence) : sinon var(--page-panel), codé en dur dans .blk-card,
+    // recouvrirait entièrement cette couleur
+    render: b => `<div class="blk-card blk-card-${b.style}"${b.bgColor ? ' style="background:transparent;"' : ''}><h3 class="blk-card-title">${escapeHtml(b.title)}</h3><p class="blk-card-text">${escapeHtml(b.text)}</p></div>`,
   },
   columns: {
     label: '2 colonnes',
@@ -106,6 +109,118 @@ const BLOCK_DEFS = {
       ? `<div class="blk-video"><iframe src="${escapeHtml(toEmbedUrl(b.url))}" allowfullscreen loading="lazy"></iframe></div>`
       : `<div class="blk-image-empty">Aucune vidéo (renseigner une URL dans les propriétés)</div>`,
   },
+  sidebar: {
+    label: 'Barre latérale',
+    icon: '☰',
+    // side 'left'/'right' : le bloc se fixe sur ce bord, pleine hauteur (voir
+    // renderBlockContent) ; 'none' : se comporte comme un bloc normal (x/y libres)
+    defaults: () => ({
+      type: 'sidebar', side: 'left', width: 260, brand: 'Marque',
+      showSearch: true, showFooter: true, activeIndex: 0,
+      items: ['Tableau de bord', 'Projets', 'Notifications', 'Analytique', 'Favoris', 'Messages'],
+    }),
+    render: b => {
+      const itemsHtml = b.items.map((label, i) => `
+        <div class="blk-sidebar-item${i === b.activeIndex ? ' active' : ''}"><span class="blk-sidebar-dot"></span>${escapeHtml(label)}</div>
+      `).join('');
+      const initial = (b.brand || '').trim().charAt(0).toUpperCase() || 'S';
+      // fond transparent si une couleur de fond personnalisée est choisie
+      // (Apparence) : sinon var(--page-panel), codé en dur dans .blk-sidebar,
+      // recouvrirait entièrement cette couleur (bloc plein cadre, opaque)
+      const bgOverride = b.bgColor ? ' style="background:transparent;"' : '';
+      return `<div class="blk-sidebar"${bgOverride}>
+        <div class="blk-sidebar-brand"><span class="blk-sidebar-logo">${escapeHtml(initial)}</span><span>${escapeHtml(b.brand)}</span></div>
+        ${b.showSearch ? '<div class="blk-sidebar-search">Rechercher…</div>' : ''}
+        <nav class="blk-sidebar-nav">${itemsHtml}</nav>
+        ${b.showFooter ? '<div class="blk-sidebar-footer">Déconnexion</div>' : ''}
+      </div>`;
+    },
+  },
+  navbar: {
+    label: 'Barre de navigation',
+    icon: '▤',
+    // side 'top' : se fixe en haut, pleine largeur (voir renderBlockContent) ; 'none' : bloc libre
+    defaults: () => ({
+      type: 'navbar', side: 'top', height: 64, brand: 'Marque', activeIndex: 0,
+      items: ['Accueil', 'Produits', 'Tarifs', 'Contact'], showButton: true, buttonText: 'Commencer',
+    }),
+    render: b => {
+      const itemsHtml = b.items.map((label, i) => `<div class="blk-navbar-item${i === b.activeIndex ? ' active' : ''}">${escapeHtml(label)}</div>`).join('');
+      const bgOverride = b.bgColor ? ' style="background:transparent;"' : '';
+      return `<div class="blk-navbar"${bgOverride}>
+        <div class="blk-navbar-brand">${escapeHtml(b.brand)}</div>
+        <nav class="blk-navbar-nav">${itemsHtml}</nav>
+        ${b.showButton ? `<a class="blk-button blk-button-primary blk-navbar-btn">${escapeHtml(b.buttonText)}</a>` : ''}
+      </div>`;
+    },
+  },
+  footer: {
+    label: 'Pied de page',
+    icon: '▥',
+    // side 'bottom' : se fixe en bas, pleine largeur (voir renderBlockContent) ; 'none' : bloc libre
+    defaults: () => ({
+      type: 'footer', side: 'bottom', height: 70,
+      text: '© 2026 Marque. Tous droits réservés.', items: ['Confidentialité', 'Conditions', 'Contact'],
+    }),
+    render: b => {
+      const itemsHtml = b.items.map(label => `<span class="blk-footer-link">${escapeHtml(label)}</span>`).join('');
+      const bgOverride = b.bgColor ? ' style="background:transparent;"' : '';
+      return `<div class="blk-footer"${bgOverride}>
+        <span class="blk-footer-text">${escapeHtml(b.text)}</span>
+        <div class="blk-footer-links">${itemsHtml}</div>
+      </div>`;
+    },
+  },
+  gallery: {
+    label: 'Galerie',
+    icon: '▦',
+    defaults: () => ({ type: 'gallery', images: [], columns: 3 }),
+    render: b => {
+      if (!b.images.length) return `<div class="blk-image-empty">Aucune image (ajouter des URLs dans les propriétés)</div>`;
+      const imgs = b.images.map(src => `<img src="${escapeHtml(src)}" alt="">`).join('');
+      return `<div class="blk-gallery" style="grid-template-columns:repeat(${Number(b.columns) || 3},1fr)">${imgs}</div>`;
+    },
+  },
+  accordion: {
+    label: 'Accordéon',
+    icon: '▾',
+    // <details>/<summary> : natif, dépliable au clic sans une ligne de JS,
+    // fonctionne aussi bien dans l'éditeur que dans le HTML exporté
+    defaults: () => ({
+      type: 'accordion',
+      items: [
+        { q: 'Première question', a: 'Réponse à la première question.' },
+        { q: 'Deuxième question', a: 'Réponse à la deuxième question.' },
+      ],
+    }),
+    render: b => {
+      const itemsHtml = b.items.map(item => `<details class="blk-accordion-item"><summary>${escapeHtml(item.q)}</summary><p>${escapeHtml(item.a)}</p></details>`).join('');
+      return `<div class="blk-accordion">${itemsHtml}</div>`;
+    },
+  },
+  contactForm: {
+    label: 'Formulaire de contact',
+    icon: '✉',
+    // action="mailto:" : fonctionne réellement sans backend (ouvre le client
+    // mail de l'utilisateur avec le message pré-rempli), plutôt qu'une
+    // fausse apparence de formulaire qui ne ferait rien au clic
+    defaults: () => ({ type: 'contactForm', title: 'Contactez-nous', email: '', buttonText: 'Envoyer' }),
+    render: b => `<form class="blk-contact-form" action="mailto:${escapeHtml(b.email)}" method="post" enctype="text/plain">
+      <h3>${escapeHtml(b.title)}</h3>
+      <input type="text" placeholder="Votre nom" name="nom">
+      <input type="email" placeholder="Votre email" name="email">
+      <textarea placeholder="Votre message" name="message" rows="4"></textarea>
+      <button type="submit" class="blk-button blk-button-primary">${escapeHtml(b.buttonText)}</button>
+    </form>`,
+  },
+};
+
+// types de bloc pouvant se fixer sur un bord du canevas (voir isPinnedBlock/
+// renderBlockContent) — chacun avec son propre jeu de côtés valides
+const PINNABLE_SIDES = {
+  sidebar: ['left', 'right'],
+  navbar: ['top'],
+  footer: ['bottom'],
 };
 
 // préréglages d'ombre portée (voir champ "shadow" du panneau Apparence)
@@ -145,16 +260,48 @@ function createBlock(type) {
 // (position:relative) est le repère de positionnement dans les deux cas :
 // en édition, .block-wrapper qui l'entoure n'a lui-même aucun
 // positionnement, donc ce div s'y place directement sans décalage
-function renderBlockContent(block) {
+// hauteurs occupées par une éventuelle navbar fixée en haut / footer fixé en
+// bas parmi TOUS les blocs de la page — permet à une barre latérale fixée de
+// s'insérer entre les deux plutôt que de les recouvrir (voir renderBlockContent)
+function computePinOffsets(allBlocks) {
+  const navbar = allBlocks.find(b => b.type === 'navbar' && b.side === 'top');
+  const footer = allBlocks.find(b => b.type === 'footer' && b.side === 'bottom');
+  return {
+    top: navbar ? (navbar.height || 64) : 0,
+    bottom: footer ? (footer.height || 70) : 0,
+  };
+}
+
+// allBlocks (tous les blocs de la page) est optionnel : sans lui, une barre
+// latérale fixée retombe sur toute la hauteur (comportement précédent) —
+// script.js le fournit toujours en pratique (canevas et export)
+function renderBlockContent(block, allBlocks) {
   const inner = BLOCK_DEFS[block.type].render(block);
-  const heightStyle = block.height ? `height:${block.height}px;` : '';
   const bgStyle = block.bgColor ? `background:${block.bgColor};` : '';
   const colorStyle = block.textColor ? `color:${block.textColor};` : '';
   const borderStyle = block.borderColor ? `border:2px solid ${block.borderColor};` : '';
   const radiusStyle = (block.radius || block.radius === 0) ? `border-radius:${block.radius}px;` : '';
   const shadowStyle = block.shadow && block.shadow !== 'none' ? `box-shadow:${SHADOW_PRESETS[block.shadow]};` : '';
   const opacityStyle = (block.opacity !== undefined && block.opacity !== null && block.opacity !== 100) ? `opacity:${block.opacity / 100};` : '';
-  const style = `position:absolute; left:${block.x}px; top:${block.y}px; width:${block.width || 400}px; ${heightStyle}${bgStyle}${colorStyle}${borderStyle}${radiusStyle}${shadowStyle}${opacityStyle} box-sizing:border-box;`;
+
+  // un bloc fixable (sidebar/navbar/footer) avec un côté choisi ignore x/y :
+  // il se fixe sur ce bord et épouse toute la largeur ou hauteur du canevas
+  // (voir aussi updateCanvasHeight, qui l'exclut pour éviter une boucle de
+  // croissance) ; gauche/droite épousent la hauteur (barre latérale, mais en
+  // s'arrêtant avant une éventuelle navbar/footer fixés plutôt que de les
+  // recouvrir), haut/bas épousent la largeur (navigation/pied de page)
+  const isPinned = (PINNABLE_SIDES[block.type] || []).includes(block.side);
+  let positionStyle;
+  if (isPinned && (block.side === 'left' || block.side === 'right')) {
+    const offsets = computePinOffsets(allBlocks || [block]);
+    positionStyle = `position:absolute; top:${offsets.top}px; bottom:${offsets.bottom}px; ${block.side}:0; width:${block.width || 260}px;`;
+  } else if (isPinned) {
+    positionStyle = `position:absolute; left:0; right:0; ${block.side}:0; height:${block.height || 64}px;`;
+  } else {
+    positionStyle = `position:absolute; left:${block.x}px; top:${block.y}px; width:${block.width || 400}px; ${block.height ? `height:${block.height}px;` : ''}`;
+  }
+
+  const style = `${positionStyle}${bgStyle}${colorStyle}${borderStyle}${radiusStyle}${shadowStyle}${opacityStyle} box-sizing:border-box;`;
   return `<div class="blk-resizable" style="${style}">${inner}</div>`;
 }
 
@@ -271,4 +418,116 @@ const PAGE_CSS = `
 
 .blk-video{ position: relative; width: 100%; padding-top: 56.25%; border-radius: var(--page-radius); overflow: hidden; background: #000; }
 .blk-video iframe{ position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+.blk-sidebar{
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: var(--page-panel);
+  padding: 20px 16px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  font-family: var(--page-bodyFont);
+}
+.blk-sidebar-brand{
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--page-headingFont);
+  font-weight: 700;
+  font-size: 14px;
+}
+.blk-sidebar-logo{
+  width: 28px; height: 28px;
+  border-radius: var(--page-radius);
+  background: var(--page-accent);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+  flex-shrink: 0;
+}
+.blk-sidebar-search{
+  font-size: 12.5px;
+  color: var(--page-textDim);
+  background: var(--page-bg);
+  border: 1px solid var(--page-border);
+  border-radius: var(--page-radius);
+  padding: 8px 10px;
+}
+.blk-sidebar-nav{ display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.blk-sidebar-item{
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px;
+  color: var(--page-textDim);
+  padding: 9px 10px;
+  border-radius: var(--page-radius);
+}
+.blk-sidebar-item.active{ background: var(--page-accent); color: #fff; font-weight: 600; }
+.blk-sidebar-dot{ width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.6; flex-shrink: 0; }
+.blk-sidebar-item.active .blk-sidebar-dot{ opacity: 1; }
+.blk-sidebar-footer{
+  font-size: 12.5px;
+  color: var(--page-textDim);
+  padding-top: 14px;
+  border-top: 1px solid var(--page-border);
+}
+
+.blk-navbar{
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 24px;
+  background: var(--page-panel);
+  box-sizing: border-box;
+  font-family: var(--page-bodyFont);
+}
+.blk-navbar-brand{ font-family: var(--page-headingFont); font-weight: 700; font-size: 16px; margin-right: auto; }
+.blk-navbar-nav{ display: flex; gap: 20px; }
+.blk-navbar-item{ font-size: 13.5px; color: var(--page-textDim); }
+.blk-navbar-item.active{ color: var(--page-text); font-weight: 600; }
+.blk-navbar-btn{ padding: 8px 16px; font-size: 13px; }
+
+.blk-footer{
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 24px;
+  background: var(--page-panel);
+  border-top: 1px solid var(--page-border);
+  box-sizing: border-box;
+  font-family: var(--page-bodyFont);
+  font-size: 12.5px;
+  color: var(--page-textDim);
+}
+.blk-footer-links{ display: flex; gap: 16px; }
+
+.blk-gallery{ display: grid; gap: 10px; }
+.blk-gallery img{ width: 100%; height: 120px; object-fit: cover; border-radius: var(--page-radius); display: block; }
+
+.blk-accordion{ display: flex; flex-direction: column; gap: 8px; font-family: var(--page-bodyFont); }
+.blk-accordion-item{
+  background: var(--page-panel);
+  border: 1px solid var(--page-border);
+  border-radius: var(--page-radius);
+  padding: 12px 14px;
+}
+.blk-accordion-item summary{ font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.blk-accordion-item p{ font-size: 13px; color: var(--page-textDim); margin: 10px 0 0; line-height: 1.5; }
+
+.blk-contact-form{ display: flex; flex-direction: column; gap: 10px; font-family: var(--page-bodyFont); }
+.blk-contact-form h3{ font-family: var(--page-headingFont); font-size: 17px; font-weight: 700; margin: 0 0 4px; }
+.blk-contact-form input,
+.blk-contact-form textarea{
+  font-family: var(--page-bodyFont);
+  font-size: 13px;
+  padding: 9px 11px;
+  border: 1px solid var(--page-border);
+  border-radius: var(--page-radius);
+  background: var(--page-panel);
+  color: var(--page-text);
+  box-sizing: border-box;
+}
+.blk-contact-form button{ align-self: flex-start; border: none; cursor: pointer; }
 `;

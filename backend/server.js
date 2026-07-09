@@ -34,14 +34,14 @@ app.get('/api/projects/:name', (req, res) => {
 
 // crée ou remplace un projet (nom = clé) — pas d'auth, outil local mono-utilisateur
 app.put('/api/projects/:name', (req, res) => {
-  const { theme, blocks } = req.body;
-  if (!Array.isArray(blocks)) return res.status(400).json({ error: 'blocks doit être un tableau.' });
+  const { theme, pages } = req.body;
+  if (!Array.isArray(pages) || !pages.length) return res.status(400).json({ error: 'pages doit être un tableau non vide.' });
 
   const projects = loadProjects();
   projects[req.params.name] = {
     name: req.params.name,
     theme: theme || 'minimal-light',
-    blocks,
+    pages,
     updatedAt: new Date().toISOString(),
   };
   saveProjects(projects);

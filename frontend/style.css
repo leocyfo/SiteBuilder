@@ -43,6 +43,52 @@ body{
   flex-shrink: 0;
 }
 
+/* ---------- BARRE DE PAGES ---------- */
+.sb-pages-bar{
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  background: var(--sb-bg);
+  border-bottom: 1px solid var(--sb-border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.page-tab{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--sb-panel-2);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--radius-sm);
+  color: var(--sb-text-dim);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.page-tab:hover{ border-color: var(--sb-accent); }
+.page-tab.active{ color: var(--sb-text); border-color: var(--sb-accent); background: var(--sb-panel); }
+
+.page-tab-close{
+  color: var(--sb-text-dim);
+  font-size: 13px;
+  line-height: 1;
+}
+.page-tab-close:hover{ color: #e0716b; }
+
+.page-tab-add{
+  font-size: 15px;
+  font-weight: 700;
+  padding: 6px 12px;
+  color: var(--sb-accent);
+}
+
 .sb-topbar-left,
 .sb-topbar-right{
   display: flex;
@@ -195,6 +241,38 @@ body{
 .sb-palette-list{
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+
+.palette-category-header{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--sb-text-dim);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0 0 8px;
+  cursor: pointer;
+}
+
+.palette-category-header:hover{ color: var(--sb-text); }
+
+.palette-category-arrow{
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 0.15s var(--ease);
+}
+.palette-category-arrow.collapsed{ transform: rotate(-90deg); }
+
+.palette-category-items{
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
@@ -227,6 +305,47 @@ body{
   font-size: 12px;
   color: var(--sb-accent);
   flex-shrink: 0;
+}
+
+/* ---------- CALQUES ---------- */
+.sb-panel-title-spaced{ margin-top: 22px; }
+
+.sb-layers-list{
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.layer-item{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.layer-item:hover{ background: var(--sb-panel-2); }
+.layer-item.selected{ background: var(--sb-panel-2); border-color: var(--sb-accent); }
+.layer-item.multi-selected{ background: var(--sb-panel-2); border-color: var(--sb-snap); border-style: dashed; }
+.layer-item.drag-over{ border-color: var(--sb-accent); border-style: dashed; }
+
+.layer-item-icon{
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--sb-text-dim);
+}
+
+.layer-item-label{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- CANEVAS ---------- */
@@ -263,7 +382,8 @@ body{
    par rapport à .page-canvas (position:relative), pas par rapport à ce
    wrapper — c'est lui qui donne son repère aux poignées/cadre/bouton */
 .block-wrapper .blk-resizable{ cursor: move; }
-.block-wrapper.locked .blk-resizable{ cursor: default; }
+.block-wrapper.locked .blk-resizable,
+.block-wrapper.pinned .blk-resizable{ cursor: default; }
 
 /* le cadre de sélection suit .blk-resizable via .selection-frame, positionné
    en JS (positionOverlays) sur les bords réels du bloc, comme les poignées */
@@ -276,6 +396,13 @@ body{
   z-index: 4;
 }
 .block-wrapper.selected .selection-frame{ display: block; }
+/* sélection multiple (Maj+clic) : cadre en tirets pour la distinguer de la
+   sélection simple (trait plein) */
+.block-wrapper.multi-selected .selection-frame{
+  display: block;
+  border-style: dashed;
+  border-color: var(--sb-snap);
+}
 
 .block-controls{
   /* left/top positionnés en JS (positionOverlays), sur le coin du bloc
@@ -320,8 +447,10 @@ body{
 }
 
 .block-wrapper.selected .resize-handles{ display: block; }
-/* un bloc verrouillé reste sélectionnable mais pas redimensionnable */
-.block-wrapper.locked .resize-handles{ display: none; }
+/* un bloc verrouillé ou fixé sur un bord reste sélectionnable mais pas
+   redimensionnable par glisser (largeur ajustable via le panneau) */
+.block-wrapper.locked .resize-handles,
+.block-wrapper.pinned .resize-handles{ display: none; }
 
 .resize-handle{
   position: absolute;
