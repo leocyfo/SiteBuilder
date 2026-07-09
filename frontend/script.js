@@ -246,6 +246,9 @@ function renderLayers() {
     const id = item.dataset.id;
     item.addEventListener('click', (e) => {
       if (e.shiftKey) { toggleMultiSelect(id); return; }
+      // cohérent avec le mousedown du canevas : un clic simple sur un bloc
+      // déjà dans une sélection multiple la préserve au lieu de la réduire
+      if (multiSelectIds.size > 1 && multiSelectIds.has(id)) return;
       clearMultiSelect();
       selectBlock(id);
     });
@@ -480,6 +483,7 @@ function startMove(e, id, isGroup) {
   function onUp() {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    window.removeEventListener('blur', onUp);
     hideSnapGuides();
     gestureActive = false;
     pushHistory();
@@ -487,6 +491,10 @@ function startMove(e, id, isGroup) {
 
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
+  // si le curseur quitte la fenêtre entièrement, aucun mouseup ne peut plus
+  // survenir sur document : sans ce filet, les écouteurs resteraient
+  // accrochés indéfiniment et gestureActive bloquerait tous les raccourcis
+  window.addEventListener('blur', onUp);
 }
 
 // glisser une poignée ajuste width/height (px) depuis n'importe quel côté ;
@@ -543,6 +551,7 @@ function startResize(e, id, dir) {
   function onUp() {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    window.removeEventListener('blur', onUp);
     hideSnapGuides();
     gestureActive = false;
     pushHistory();
@@ -550,6 +559,7 @@ function startResize(e, id, dir) {
 
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
+  window.addEventListener('blur', onUp);
 }
 
 function toggleLock(id) {
@@ -649,13 +659,18 @@ function selectBlock(id) {
 function toggleMultiSelect(id) {
   if (multiSelectIds.has(id)) {
     multiSelectIds.delete(id);
+    // selectedId ne doit jamais pointer sur un bloc retiré de la sélection
+    // (sinon Ctrl+C/X/D agirait silencieusement dessus) — retombe sur un
+    // membre restant de la sélection, ou aucun s'il n'en reste plus
+    const remaining = [...multiSelectIds];
+    state.selectedId = remaining.length ? remaining[remaining.length - 1] : null;
   } else {
     // amorce la sélection multiple avec le bloc déjà sélectionné simplement,
     // pour que le premier Maj+clic ajoute vraiment un 2e bloc à la sélection
     if (multiSelectIds.size === 0 && state.selectedId) multiSelectIds.add(state.selectedId);
     multiSelectIds.add(id);
+    state.selectedId = id;
   }
-  state.selectedId = id;
   renderSelectionVisuals();
   renderProps();
 }
@@ -719,7 +734,9 @@ function deleteBlocks(ids) {
   const idSet = new Set(ids);
   setBlocks(getBlocks().filter(b => !idSet.has(b.id)));
   if (idSet.has(state.selectedId)) state.selectedId = null;
-  multiSelectIds.clear();
+  // ne retire que les ids réellement supprimés — un autre bloc actif dans la
+  // sélection multiple (non concerné par cette suppression) doit le rester
+  idSet.forEach(id => multiSelectIds.delete(id));
   pushHistory();
   render();
 }
@@ -779,7 +796,11 @@ function renderMultiSelectProps() {
     </div>
     <button type="button" class="prop-delete-btn" id="propsDeleteSelectionBtn">Supprimer la sélection</button>
   `;
-  const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  const bind = (id, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', fn);
+    else console.error(`élément introuvable : ${id}`);
+  };
   bind('alignLeftBtn', () => alignSelection('left'));
   bind('alignCenterHBtn', () => alignSelection('center-h'));
   bind('alignRightBtn', () => alignSelection('right'));
@@ -821,18 +842,21 @@ function renderProps() {
     input.addEventListener(isContinuous ? 'input' : 'change', () => {
       try {
         if (field.type === 'list-items') {
-          block[field.key] = input.value.split('\n');
+          block[field.key] = input.value.split('\n').map(s => s.trim()).filter(Boolean);
         } else if (field.type === 'qa-items') {
           // "Question | Réponse" par ligne — le texte après le premier "|"
           // est repris tel quel (join) pour tolérer une réponse contenant "|"
           block[field.key] = input.value.split('\n').map(line => {
             const [q, ...rest] = line.split('|');
             return { q: (q || '').trim(), a: rest.join('|').trim() };
-          });
+          }).filter(item => item.q || item.a);
         } else if (field.type === 'checkbox') {
           block[field.key] = input.checked;
+        } else if (field.numeric) {
+          const num = Number(input.value);
+          if (!Number.isNaN(num)) block[field.key] = num;
         } else {
-          block[field.key] = field.numeric ? Number(input.value) : input.value;
+          block[field.key] = input.value;
         }
         // "side" change le comportement du wrapper lui-même (classe .pinned,
         // poignées masquées) — updateBlockDom ne touche que le contenu
@@ -859,6 +883,8 @@ function renderProps() {
       updateBlockDom(block.id);
       pushHistory();
     });
+  } else {
+    console.error('champ de propriété introuvable : prop-shadow');
   }
 
   bindSizeField('prop-width', (b, value) => { b.width = Math.max(40, Number(value) || 400); });
@@ -871,15 +897,20 @@ function renderProps() {
       pushHistory();
       render();
     });
+  } else {
+    console.error('champ de propriété introuvable : prop-locked');
   }
 
   const frontBtn = document.getElementById('propsFrontBtn');
   if (frontBtn) frontBtn.addEventListener('click', () => bringToFront(block.id));
+  else console.error('élément introuvable : propsFrontBtn');
   const backBtn = document.getElementById('propsBackBtn');
   if (backBtn) backBtn.addEventListener('click', () => sendToBack(block.id));
+  else console.error('élément introuvable : propsBackBtn');
 
   const deleteBtn = document.getElementById('propsDeleteBtn');
   if (deleteBtn) deleteBtn.addEventListener('click', () => deleteBlock(block.id));
+  else console.error('élément introuvable : propsDeleteBtn');
 
   function bindSizeField(id, apply) {
     const input = document.getElementById(id);
@@ -1063,14 +1094,17 @@ function applyHistorySnapshot(entry) {
   updateHistoryButtons();
 }
 
+// gestureActive vérifié ici (pas seulement dans onGlobalKeydown) pour couvrir
+// aussi les boutons ↶/↷ : sans ça, un Entrée/Espace sur le bouton Annuler
+// pendant un glisser remplacerait le DOM sous les écouteurs mousemove actifs
 function undo() {
-  if (historyIndex <= 0) return;
+  if (gestureActive || historyIndex <= 0) return;
   historyIndex--;
   applyHistorySnapshot(historyStack[historyIndex]);
 }
 
 function redo() {
-  if (historyIndex >= historyStack.length - 1) return;
+  if (gestureActive || historyIndex >= historyStack.length - 1) return;
   historyIndex++;
   applyHistorySnapshot(historyStack[historyIndex]);
 }
@@ -1082,8 +1116,12 @@ function updateHistoryButtons() {
   if (redoBtn) redoBtn.disabled = historyIndex >= historyStack.length - 1;
 }
 
-document.getElementById('undoBtn').addEventListener('click', undo);
-document.getElementById('redoBtn').addEventListener('click', redo);
+const undoBtnEl = document.getElementById('undoBtn');
+if (undoBtnEl) undoBtnEl.addEventListener('click', undo);
+else console.error('élément introuvable : undoBtn');
+const redoBtnEl = document.getElementById('redoBtn');
+if (redoBtnEl) redoBtnEl.addEventListener('click', redo);
+else console.error('élément introuvable : redoBtn');
 
 // ---------- Guides d'alignement / aimantation ----------
 
@@ -1240,6 +1278,7 @@ function onGlobalKeydown(e) {
 }
 
 function onGlobalKeyup(e) {
+  if (gestureActive) return;
   // un appui maintenu répète keydown mais keyup ne fire qu'une fois au
   // relâchement : la pression entière ne compte que pour une seule entrée
   // d'historique, comme un geste de glisser
@@ -1265,10 +1304,15 @@ function toggleShortcutsPanel(show) {
   panel.hidden = show === undefined ? !panel.hidden : !show;
 }
 
-document.getElementById('shortcutsBtn').addEventListener('click', (e) => {
-  e.stopPropagation();
-  toggleShortcutsPanel();
-});
+const shortcutsBtnEl = document.getElementById('shortcutsBtn');
+if (shortcutsBtnEl) {
+  shortcutsBtnEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleShortcutsPanel();
+  });
+} else {
+  console.error('élément introuvable : shortcutsBtn');
+}
 document.addEventListener('click', (e) => {
   const panel = document.getElementById('shortcutsPanel');
   if (!panel || panel.hidden) return;

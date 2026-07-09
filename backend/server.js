@@ -36,6 +36,9 @@ app.get('/api/projects/:name', (req, res) => {
 app.put('/api/projects/:name', (req, res) => {
   const { theme, pages } = req.body;
   if (!Array.isArray(pages) || !pages.length) return res.status(400).json({ error: 'pages doit être un tableau non vide.' });
+  if (!pages.every(p => p && typeof p === 'object' && Array.isArray(p.blocks))) {
+    return res.status(400).json({ error: 'chaque page doit avoir un tableau blocks.' });
+  }
 
   const projects = loadProjects();
   projects[req.params.name] = {

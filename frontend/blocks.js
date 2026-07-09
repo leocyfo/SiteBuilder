@@ -28,7 +28,11 @@ const BLOCK_DEFS = {
     defaults: () => ({ type: 'heading', text: 'Titre de section', level: 2, align: 'left', style: 'default' }),
     render: b => {
       const styleClass = b.style && b.style !== 'default' ? ` blk-heading-${b.style}` : '';
-      return `<h${b.level} class="blk-heading blk-align-${b.align}${styleClass}">${escapeHtml(b.text)}</h${b.level}>`;
+      // niveau validé/borné à 1-3 (les seules options du panneau) : une
+      // donnée corrompue/importée ne doit jamais produire une balise
+      // invalide ou casser hors de la balise
+      const level = [1, 2, 3].includes(Number(b.level)) ? Number(b.level) : 2;
+      return `<h${level} class="blk-heading blk-align-${b.align}${styleClass}">${escapeHtml(b.text)}</h${level}>`;
     },
   },
   paragraph: {
@@ -41,7 +45,7 @@ const BLOCK_DEFS = {
     label: 'Bouton',
     icon: '▭',
     defaults: () => ({ type: 'button', text: 'Cliquez ici', href: '#', style: 'primary' }),
-    render: b => `<a class="blk-button blk-button-${b.style}" href="${escapeHtml(b.href)}">${escapeHtml(b.text)}</a>`,
+    render: b => `<a class="blk-button blk-button-${b.style || 'primary'}" href="${escapeHtml(b.href)}">${escapeHtml(b.text)}</a>`,
   },
   image: {
     label: 'Image',
@@ -65,23 +69,24 @@ const BLOCK_DEFS = {
     label: 'Citation',
     icon: '"',
     defaults: () => ({ type: 'quote', text: 'Une citation inspirante.', author: '', style: 'default' }),
-    render: b => `<blockquote class="blk-quote blk-quote-${b.style}"><p>${escapeHtml(b.text)}</p>${b.author ? `<cite>— ${escapeHtml(b.author)}</cite>` : ''}</blockquote>`,
+    render: b => `<blockquote class="blk-quote blk-quote-${b.style || 'default'}"><p>${escapeHtml(b.text)}</p>${b.author ? `<cite>— ${escapeHtml(b.author)}</cite>` : ''}</blockquote>`,
   },
   list: {
     label: 'Liste',
     icon: '≡',
     defaults: () => ({ type: 'list', items: ['Premier élément', 'Deuxième élément', 'Troisième élément'], style: 'bullet' }),
     render: b => {
-      const tag = b.style === 'numbered' ? 'ol' : 'ul';
+      const style = b.style || 'bullet';
+      const tag = style === 'numbered' ? 'ol' : 'ul';
       const itemsHtml = b.items.map(i => `<li>${escapeHtml(i)}</li>`).join('');
-      return `<${tag} class="blk-list blk-list-${b.style}">${itemsHtml}</${tag}>`;
+      return `<${tag} class="blk-list blk-list-${style}">${itemsHtml}</${tag}>`;
     },
   },
   divider: {
     label: 'Séparateur',
     icon: '—',
     defaults: () => ({ type: 'divider', style: 'solid' }),
-    render: b => `<hr class="blk-divider blk-divider-${b.style}">`,
+    render: b => `<hr class="blk-divider blk-divider-${b.style || 'solid'}">`,
   },
   card: {
     label: 'Carte',
@@ -90,13 +95,13 @@ const BLOCK_DEFS = {
     // fond transparent si une couleur de fond personnalisée est choisie
     // (Apparence) : sinon var(--page-panel), codé en dur dans .blk-card,
     // recouvrirait entièrement cette couleur
-    render: b => `<div class="blk-card blk-card-${b.style}"${b.bgColor ? ' style="background:transparent;"' : ''}><h3 class="blk-card-title">${escapeHtml(b.title)}</h3><p class="blk-card-text">${escapeHtml(b.text)}</p></div>`,
+    render: b => `<div class="blk-card blk-card-${b.style || 'default'}"${b.bgColor ? ' style="background:transparent;"' : ''}><h3 class="blk-card-title">${escapeHtml(b.title)}</h3><p class="blk-card-text">${escapeHtml(b.text)}</p></div>`,
   },
   columns: {
     label: '2 colonnes',
     icon: '❘❘',
     defaults: () => ({ type: 'columns', leftTitle: 'Colonne 1', leftText: 'Texte de la première colonne.', rightTitle: 'Colonne 2', rightText: 'Texte de la seconde colonne.', style: 'default' }),
-    render: b => `<div class="blk-columns blk-columns-${b.style}">
+    render: b => `<div class="blk-columns blk-columns-${b.style || 'default'}">
       <div class="blk-column"><h4>${escapeHtml(b.leftTitle)}</h4><p>${escapeHtml(b.leftText)}</p></div>
       <div class="blk-column"><h4>${escapeHtml(b.rightTitle)}</h4><p>${escapeHtml(b.rightText)}</p></div>
     </div>`,
@@ -120,8 +125,12 @@ const BLOCK_DEFS = {
       items: ['Tableau de bord', 'Projets', 'Notifications', 'Analytique', 'Favoris', 'Messages'],
     }),
     render: b => {
+      // Number() : une valeur non numérique (donnée corrompue, ou NaN suite à
+      // une saisie invalide dans le champ — voir script.js) ne doit
+      // silencieusement matcher aucun élément plutôt que planter
+      const activeIndex = Number(b.activeIndex);
       const itemsHtml = b.items.map((label, i) => `
-        <div class="blk-sidebar-item${i === b.activeIndex ? ' active' : ''}"><span class="blk-sidebar-dot"></span>${escapeHtml(label)}</div>
+        <div class="blk-sidebar-item${i === activeIndex ? ' active' : ''}"><span class="blk-sidebar-dot"></span>${escapeHtml(label)}</div>
       `).join('');
       const initial = (b.brand || '').trim().charAt(0).toUpperCase() || 'S';
       // fond transparent si une couleur de fond personnalisée est choisie
@@ -145,7 +154,8 @@ const BLOCK_DEFS = {
       items: ['Accueil', 'Produits', 'Tarifs', 'Contact'], showButton: true, buttonText: 'Commencer',
     }),
     render: b => {
-      const itemsHtml = b.items.map((label, i) => `<div class="blk-navbar-item${i === b.activeIndex ? ' active' : ''}">${escapeHtml(label)}</div>`).join('');
+      const activeIndex = Number(b.activeIndex);
+      const itemsHtml = b.items.map((label, i) => `<div class="blk-navbar-item${i === activeIndex ? ' active' : ''}">${escapeHtml(label)}</div>`).join('');
       const bgOverride = b.bgColor ? ' style="background:transparent;"' : '';
       return `<div class="blk-navbar"${bgOverride}>
         <div class="blk-navbar-brand">${escapeHtml(b.brand)}</div>
@@ -194,7 +204,11 @@ const BLOCK_DEFS = {
       ],
     }),
     render: b => {
-      const itemsHtml = b.items.map(item => `<details class="blk-accordion-item"><summary>${escapeHtml(item.q)}</summary><p>${escapeHtml(item.a)}</p></details>`).join('');
+      // chaque item a son propre fond opaque codé en dur (.blk-accordion-item) :
+      // sans le neutraliser, une couleur de fond personnalisée (Apparence) sur
+      // le bloc entier resterait invisible derrière eux, comme pour card/sidebar
+      const itemStyle = b.bgColor ? ' style="background:transparent;"' : '';
+      const itemsHtml = b.items.map(item => `<details class="blk-accordion-item"${itemStyle}><summary>${escapeHtml(item.q)}</summary><p>${escapeHtml(item.a)}</p></details>`).join('');
       return `<div class="blk-accordion">${itemsHtml}</div>`;
     },
   },
@@ -214,6 +228,11 @@ const BLOCK_DEFS = {
     </form>`,
   },
 };
+
+// hauteur par défaut d'un bloc fixé en haut/bas (utilisée à la fois par
+// computePinOffsets et par renderBlockContent : une seule source pour éviter
+// que les deux calculs divergent si height est absent/effacé)
+const PIN_DEFAULT_HEIGHT = { navbar: 64, footer: 70 };
 
 // types de bloc pouvant se fixer sur un bord du canevas (voir isPinnedBlock/
 // renderBlockContent) — chacun avec son propre jeu de côtés valides
@@ -267,8 +286,8 @@ function computePinOffsets(allBlocks) {
   const navbar = allBlocks.find(b => b.type === 'navbar' && b.side === 'top');
   const footer = allBlocks.find(b => b.type === 'footer' && b.side === 'bottom');
   return {
-    top: navbar ? (navbar.height || 64) : 0,
-    bottom: footer ? (footer.height || 70) : 0,
+    top: navbar ? (navbar.height || PIN_DEFAULT_HEIGHT.navbar) : 0,
+    bottom: footer ? (footer.height || PIN_DEFAULT_HEIGHT.footer) : 0,
   };
 }
 
@@ -277,9 +296,13 @@ function computePinOffsets(allBlocks) {
 // script.js le fournit toujours en pratique (canevas et export)
 function renderBlockContent(block, allBlocks) {
   const inner = BLOCK_DEFS[block.type].render(block);
-  const bgStyle = block.bgColor ? `background:${block.bgColor};` : '';
-  const colorStyle = block.textColor ? `color:${block.textColor};` : '';
-  const borderStyle = block.borderColor ? `border:2px solid ${block.borderColor};` : '';
+  // échappées : ce sont des couleurs choisies par l'utilisateur dans le
+  // panneau Apparence, mais un fichier de projet importé/corrompu pourrait
+  // contenir n'importe quelle chaîne — sans échappement, une valeur comme
+  // `red;" onmouseover="…` sortirait de l'attribut style
+  const bgStyle = block.bgColor ? `background:${escapeHtml(block.bgColor)};` : '';
+  const colorStyle = block.textColor ? `color:${escapeHtml(block.textColor)};` : '';
+  const borderStyle = block.borderColor ? `border:2px solid ${escapeHtml(block.borderColor)};` : '';
   const radiusStyle = (block.radius || block.radius === 0) ? `border-radius:${block.radius}px;` : '';
   const shadowStyle = block.shadow && block.shadow !== 'none' ? `box-shadow:${SHADOW_PRESETS[block.shadow]};` : '';
   const opacityStyle = (block.opacity !== undefined && block.opacity !== null && block.opacity !== 100) ? `opacity:${block.opacity / 100};` : '';
@@ -296,9 +319,13 @@ function renderBlockContent(block, allBlocks) {
     const offsets = computePinOffsets(allBlocks || [block]);
     positionStyle = `position:absolute; top:${offsets.top}px; bottom:${offsets.bottom}px; ${block.side}:0; width:${block.width || 260}px;`;
   } else if (isPinned) {
-    positionStyle = `position:absolute; left:0; right:0; ${block.side}:0; height:${block.height || 64}px;`;
+    const defaultHeight = PIN_DEFAULT_HEIGHT[block.type] || 64;
+    positionStyle = `position:absolute; left:0; right:0; ${block.side}:0; height:${block.height || defaultHeight}px;`;
   } else {
-    positionStyle = `position:absolute; left:${block.x}px; top:${block.y}px; width:${block.width || 400}px; ${block.height ? `height:${block.height}px;` : ''}`;
+    // x/y de secours pour un bloc importé/legacy antérieur à ces champs
+    // génériques (sinon "left:undefinedpx" — silencieusement ignoré par le
+    // navigateur, mais le bloc se retrouve visuellement à l'origine du canevas)
+    positionStyle = `position:absolute; left:${block.x || 0}px; top:${block.y || 0}px; width:${block.width || 400}px; ${block.height ? `height:${block.height}px;` : ''}`;
   }
 
   const style = `${positionStyle}${bgStyle}${colorStyle}${borderStyle}${radiusStyle}${shadowStyle}${opacityStyle} box-sizing:border-box;`;
@@ -501,6 +528,8 @@ const PAGE_CSS = `
   font-size: 12.5px;
   color: var(--page-textDim);
 }
+.blk-footer-text{ color: var(--page-textDim); }
+.blk-footer-link{ color: var(--page-textDim); }
 .blk-footer-links{ display: flex; gap: 16px; }
 
 .blk-gallery{ display: grid; gap: 10px; }
