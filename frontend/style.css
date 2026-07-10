@@ -11,6 +11,7 @@
   --sb-text:    #edeff2;
   --sb-text-dim:#8b909c;
   --sb-accent:  #5b9fe8;
+  --sb-accent-rgb: 91, 159, 232;
   --sb-snap:    #ff4d8f;
   --font-ui:    'Inter', sans-serif;
   --font-mono:  'IBM Plex Mono', monospace;
@@ -134,6 +135,11 @@ body{
 
 .sb-btn:hover{ border-color: var(--sb-accent); }
 
+/* le bouton "Retour au hub" est un <a>, pas un <button> — annule le
+   soulignement par défaut des liens pour qu'il se fonde dans les autres
+   boutons de la barre du haut */
+.sb-btn[href]{ text-decoration: none; display: inline-flex; align-items: center; }
+
 .sb-btn-accent{
   background: var(--sb-accent);
   border-color: var(--sb-accent);
@@ -224,6 +230,9 @@ body{
 }
 
 .sb-props{
+  /* plus large que la palette : la bande d'onglets verticale façon Blender
+     (voir .prop-tabs-v) laisse sinon trop peu de place aux champs */
+  width: 260px;
   border-right: none;
   border-left: 1px solid var(--sb-border);
 }
@@ -403,65 +412,54 @@ body{
 /* enveloppe éditeur autour de chaque bloc (jamais exportée — voir
    renderBlockContent vs. les wrappers ajoutés par script.js). Elle ne porte
    elle-même aucun positionnement : tous ses descendants directement
-   pertinents (.blk-resizable, .selection-frame, .resize-handles,
-   .block-controls) sont position:absolute et se placent donc directement
-   par rapport à .page-canvas (position:relative), pas par rapport à ce
-   wrapper — c'est lui qui donne son repère aux poignées/cadre/bouton */
+   pertinents (.blk-resizable, .selection-frame, .resize-handles) sont
+   position:absolute et se placent donc directement par rapport à
+   .page-canvas (position:relative), pas par rapport à ce wrapper — c'est
+   lui qui donne son repère aux poignées/au cadre */
+/* le canevas n'est pas éditable en ligne (l'édition passe par le panneau de
+   propriétés) : sans ça, tout glisser (mousedown+mousemove) surligne aussi
+   le texte du bloc comme une sélection native du navigateur — très visible
+   et moche sur les titres/paragraphes en gras */
+.block-wrapper{
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .block-wrapper .blk-resizable{ cursor: move; }
 .block-wrapper.locked .blk-resizable,
 .block-wrapper.pinned .blk-resizable{ cursor: default; }
 
 /* le cadre de sélection suit .blk-resizable via .selection-frame, positionné
-   en JS (positionOverlays) sur les bords réels du bloc, comme les poignées */
+   en JS (positionOverlays) sur les bords réels du bloc, comme les poignées.
+   opacity/visibility (pas display) pour permettre un fondu à l'apparition */
 .selection-frame{
   position: absolute;
   border: 2px solid var(--sb-accent);
   border-radius: var(--radius-sm);
-  display: none;
+  box-shadow: 0 0 0 4px rgba(var(--sb-accent-rgb), 0.16);
+  opacity: 0;
+  visibility: hidden;
   pointer-events: none;
   z-index: 4;
+  transition: opacity 0.12s var(--ease), box-shadow 0.15s var(--ease), border-color 0.15s var(--ease);
 }
-.block-wrapper.selected .selection-frame{ display: block; }
-/* sélection multiple (Maj+clic) : cadre en tirets pour la distinguer de la
-   sélection simple (trait plein) */
+.block-wrapper.selected .selection-frame{ opacity: 1; visibility: visible; }
+/* sélection multiple (Maj+clic) : cadre en tirets (couleur dédiée à
+   l'aimantation) pour la distinguer de la sélection simple (trait plein) */
 .block-wrapper.multi-selected .selection-frame{
-  display: block;
+  opacity: 1;
+  visibility: visible;
   border-style: dashed;
   border-color: var(--sb-snap);
+  box-shadow: 0 0 0 4px rgba(255, 77, 143, 0.14);
 }
-
-.block-controls{
-  /* left/top positionnés en JS (positionOverlays), sur le coin du bloc
-     réellement rendu — pas d'ancrage CSS statique sur le wrapper pleine largeur */
-  position: absolute;
-  display: none;
-  gap: 4px;
-  z-index: 5;
-}
-
-.block-wrapper:hover .block-controls,
-.block-wrapper.selected .block-controls{ display: flex; }
-
-.block-control-btn{
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--sb-panel-2);
-  border: 1px solid var(--sb-border);
-  border-radius: 50%;
-  color: var(--sb-text-dim);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.block-control-btn:hover{ color: var(--sb-text); border-color: var(--sb-accent); }
-
-.block-control-btn.locked{
-  background: var(--sb-accent);
-  color: #0e1013;
-  border-color: var(--sb-accent);
+/* verrouillé/fixé : cadre neutre et sans halo — signale "sélectionné mais
+   pas déplaçable", pour ne pas laisser croire qu'on peut glisser le bloc */
+.block-wrapper.locked .selection-frame,
+.block-wrapper.pinned .selection-frame{
+  border-color: var(--sb-text-dim);
+  border-style: dashed;
+  box-shadow: none;
 }
 
 /* poignées de redimensionnement : positionnées dynamiquement en JS
@@ -478,34 +476,40 @@ body{
 .block-wrapper.locked .resize-handles,
 .block-wrapper.pinned .resize-handles{ display: none; }
 
+/* poignées "pilule" : fond creux + bordure accent plutôt qu'un bloc plein,
+   pour un rendu plus fin ; se remplissent au survol comme retour tactile */
 .resize-handle{
   position: absolute;
-  background: var(--sb-accent);
-  border-radius: 3px;
+  background: var(--sb-bg);
+  border: 2px solid var(--sb-accent);
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
   pointer-events: auto;
+  transition: background 0.12s var(--ease), transform 0.12s var(--ease);
 }
+.resize-handle:hover{ background: var(--sb-accent); }
 
 .resize-handle.rh-left,
 .resize-handle.rh-right{
   top: 50%;
-  width: 6px;
-  height: 32px;
-  margin-top: -16px;
+  width: 5px;
+  height: 28px;
+  margin-top: -14px;
   cursor: ew-resize;
 }
-.resize-handle.rh-left{ left: -4px; }
-.resize-handle.rh-right{ right: -4px; }
+.resize-handle.rh-left{ left: -5px; }
+.resize-handle.rh-right{ right: -5px; }
 
 .resize-handle.rh-top,
 .resize-handle.rh-bottom{
   left: 50%;
-  width: 32px;
-  height: 6px;
-  margin-left: -16px;
+  width: 28px;
+  height: 5px;
+  margin-left: -14px;
   cursor: ns-resize;
 }
-.resize-handle.rh-top{ top: -4px; }
-.resize-handle.rh-bottom{ bottom: -4px; }
+.resize-handle.rh-top{ top: -5px; }
+.resize-handle.rh-bottom{ bottom: -5px; }
 
 /* guides d'aimantation : lignes fines affichées pendant un glisser quand un
    bord/centre s'aligne avec un autre bloc (ou le canevas) — jamais présentes
@@ -526,6 +530,228 @@ body{
   font-size: 12.5px;
   font-style: italic;
 }
+
+/* fil d'Ariane discret (icône + type de bloc), au-dessus de la ligne façon
+   champ de nom — reproduit le petit texte "Cube" au-dessus du champ de nom
+   dans l'éditeur de propriétés Blender */
+.props-breadcrumb{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--sb-text-dim);
+  margin-bottom: 8px;
+}
+.props-breadcrumb-icon{ font-family: var(--font-mono); font-size: 11px; }
+.props-breadcrumb-label{ color: var(--sb-text); font-weight: 600; }
+
+/* ligne façon "champ de nom" Blender : fond distinct + icône carrée colorée
+   à gauche, montre un aperçu du contenu du bloc plutôt qu'un nom éditable
+   (nos blocs n'ont pas de nom propre, contrairement aux objets Blender) */
+.props-name-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--sb-panel-2);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  margin-bottom: 14px;
+  font-size: 12.5px;
+  color: var(--sb-text);
+}
+.props-name-icon{
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  background: var(--sb-accent);
+  color: #0e1013;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.props-name-text{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* bandeau de recherche des propriétés, façon barre de recherche de
+   l'éditeur de propriétés Blender — en tête du panneau, au-dessus de la
+   mise en page à deux colonnes. Loupe dessinée en CSS (cercle + trait) au
+   lieu d'un glyphe emoji, pour rester cohérent avec le reste des icônes
+   monochromes de l'appli plutôt que de dépendre du rendu couleur d'emoji */
+.prop-search-row{ position: relative; margin-bottom: 12px; }
+.prop-search-row .sb-input{ width: 100%; box-sizing: border-box; padding-left: 28px; }
+.prop-search-row::before{
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -8px;
+  border: 1.5px solid var(--sb-text-dim);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.prop-search-row::after{
+  content: '';
+  position: absolute;
+  left: 17px;
+  top: 50%;
+  width: 1.5px;
+  height: 6px;
+  margin-top: 1px;
+  background: var(--sb-text-dim);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.prop-search-empty{
+  color: var(--sb-text-dim);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 12px 0;
+}
+
+/* mise en page à deux colonnes façon Blender : bande d'onglets icônes fixe
+   sur le bord gauche du panneau, contenu défilant à droite */
+.props-layout{
+  display: flex;
+  /* stretch (pas flex-start) : la bande d'onglets doit occuper toute la
+     hauteur du panneau de champs, pas seulement la hauteur de ses icônes —
+     c'est ce qui donne la colonne pleine hauteur de Blender, collée à
+     gauche, plutôt qu'un petit bloc flottant en haut */
+  align-items: stretch;
+  gap: 0;
+}
+
+.prop-panel-body{
+  flex: 1;
+  min-width: 0;
+  /* seul espace entre la bande colorée et le contenu — pas de gap flex en
+     plus, qui doublait l'écart et laissait une bande vide inutile */
+  padding-left: 8px;
+}
+
+/* onglets d'inspecteur (Contenu / Apparence / Taille & ordre), inspirés de
+   la colonne Objet/Modificateurs/Matériau... de Blender : un seul groupe de
+   champs affiché à la fois plutôt qu'un accordéon unique. Fond distinct de
+   .sb-props pour bien séparer visuellement la bande d'onglets du contenu,
+   comme la colonne d'icônes de Blender qui tranche sur le reste du panneau */
+.prop-tabs-v{
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  background: var(--sb-bg);
+  padding: 4px;
+  /* annule le padding gauche de .sb-props pour coller la bande au bord réel
+     du panneau, comme la colonne d'icônes de Blender qui touche le bord de
+     l'éditeur de propriétés — pas de coin arrondi côté gauche, il est collé */
+  margin-left: -16px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.prop-tab-v{
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--sb-text-dim);
+  cursor: pointer;
+  transition: color 0.12s var(--ease), background 0.12s var(--ease);
+}
+
+.prop-tab-v:hover{ background: var(--sb-panel-2); color: var(--sb-text); }
+
+.prop-tab-v.active{
+  background: var(--sb-accent);
+  color: #0e1013;
+}
+
+.prop-tab-icon{ font-size: 15px; line-height: 1; }
+
+/* sous-groupes repliables façon Blender (Transform/Relations/Collections...
+   dans l'onglet Objet) : liste de lignes à chevron, pas de carte/boîte */
+.prop-row-group{ border-bottom: 1px solid var(--sb-border); }
+.prop-row-group:last-child{ border-bottom: none; }
+
+.prop-row-header{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 9px 0;
+  color: var(--sb-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.prop-row-header:hover{ color: var(--sb-accent); }
+
+.prop-row-arrow{
+  display: inline-block;
+  font-size: 9px;
+  color: var(--sb-text-dim);
+  transition: transform 0.15s var(--ease);
+}
+.prop-row-arrow.expanded{ transform: rotate(90deg); }
+
+.prop-row-body{
+  overflow: hidden;
+  max-height: 900px;
+  opacity: 1;
+  padding-bottom: 12px;
+  transition: max-height 0.2s var(--ease), opacity 0.15s var(--ease);
+}
+.prop-row-body.collapsed{
+  max-height: 0;
+  opacity: 0;
+  padding-bottom: 0;
+}
+
+/* glisser horizontalement sur le libellé d'un champ numérique en change la
+   valeur (voir makeLabelScrubbable) — curseur dédié + surlignage pendant le
+   glisser pour que ce comportement, non standard sur un <label>, se devine */
+.prop-label-scrub{ cursor: ew-resize; }
+.prop-label-scrub.scrubbing{ color: var(--sb-accent); }
+
+/* pastille + libellé accentué sur un champ d'Apparence qui s'écarte de sa
+   valeur par défaut (thème/100%/aucune), comme les champs modifiés Unity */
+.prop-modified-dot{
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sb-accent);
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.prop-field label.is-modified{ color: var(--sb-text); }
+
+.prop-actions{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--sb-border);
+}
+.prop-actions .prop-field-row{ margin: 0; }
+.prop-actions .prop-field-row .sb-btn{ margin-bottom: 0; }
+.prop-actions .prop-delete-btn{ margin-top: 0; }
 
 .prop-field{
   display: flex;
@@ -586,6 +812,12 @@ body{
   padding-top: 14px;
 }
 
+.prop-section-title-first{
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
 .prop-color-row{
   display: flex;
   align-items: center;
@@ -600,6 +832,50 @@ body{
 .prop-color-row input[type="color"]:disabled{
   opacity: 0.35;
 }
+
+.prop-color-row input[type="text"].prop-color-hex{
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  background: var(--sb-panel-2);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--radius-sm);
+  color: var(--sb-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.prop-color-row input[type="text"].prop-color-hex:disabled{ opacity: 0.35; }
+
+.prop-input-with-reset{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.prop-input-with-reset input,
+.prop-input-with-reset select{ flex: 1; min-width: 0; }
+
+.prop-reset-btn{
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sb-panel-2);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--radius-sm);
+  color: var(--sb-text-dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.prop-reset-btn:hover{ color: var(--sb-text); border-color: var(--sb-accent); }
 
 .prop-checkbox{
   display: flex;

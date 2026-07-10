@@ -69,6 +69,12 @@ const loadSelectEl = document.getElementById('loadSelect');
 const projectNameEl = document.getElementById('projectName');
 
 const ALIGN_OPTIONS = [['left', 'Gauche'], ['center', 'Centré'], ['right', 'Droite']];
+// #rgb ou #rrggbb — validation du champ hex texte accolé à chaque sélecteur
+// de couleur (voir bindColorField)
+const HEX_COLOR_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+function expandHexColor(v) {
+  return v.length === 4 ? '#' + [...v.slice(1)].map(c => c + c).join('') : v.toLowerCase();
+}
 
 const PROP_SCHEMAS = {
   heading: [
@@ -333,11 +339,6 @@ function renderCanvas() {
 
   canvasEl.innerHTML = blocks.map(block => `
     <div class="block-wrapper${block.id === state.selectedId && multiSelectIds.size <= 1 ? ' selected' : ''}${multiSelectIds.has(block.id) ? ' multi-selected' : ''}${block.locked ? ' locked' : ''}${isPinnedBlock(block) ? ' pinned' : ''}" data-id="${block.id}">
-      <div class="block-controls">
-        <button type="button" class="block-control-btn${block.locked ? ' locked' : ''}" data-action="lock" title="${block.locked ? 'Déverrouiller' : 'Verrouiller'}">L</button>
-        <button type="button" class="block-control-btn" data-action="duplicate" title="Dupliquer (Ctrl+D)">⧉</button>
-        <button type="button" class="block-control-btn" data-action="delete" title="Supprimer">×</button>
-      </div>
       <div class="selection-frame"></div>
       <div class="resize-handles">
         <div class="resize-handle rh-left" data-dir="left" draggable="false"></div>
@@ -360,7 +361,7 @@ function renderCanvas() {
     });
     wrapper.addEventListener('submit', (e) => e.preventDefault());
     wrapper.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.block-control-btn, .resize-handle')) return;
+      if (e.target.closest('.resize-handle')) return;
       if (e.shiftKey) {
         e.preventDefault();
         toggleMultiSelect(id);
@@ -374,18 +375,6 @@ function renderCanvas() {
       }
       clearMultiSelect();
       startMove(e, id);
-    });
-    wrapper.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteBlock(id);
-    });
-    wrapper.querySelector('[data-action="lock"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleLock(id);
-    });
-    wrapper.querySelector('[data-action="duplicate"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      duplicateBlock(id);
     });
     wrapper.querySelectorAll('.resize-handle').forEach(handle => {
       handle.addEventListener('mousedown', (e) => startResize(e, id, handle.dataset.dir));
@@ -418,17 +407,12 @@ function positionOverlays(wrapper) {
   const height = content.offsetHeight;
   const handles = wrapper.querySelector('.resize-handles');
   const frame = wrapper.querySelector('.selection-frame');
-  const controls = wrapper.querySelector('.block-controls');
   for (const el of [handles, frame]) {
     if (!el) continue;
     el.style.left = left + 'px';
     el.style.top = top + 'px';
     el.style.width = width + 'px';
     el.style.height = height + 'px';
-  }
-  if (controls) {
-    controls.style.left = (left + width - 14) + 'px';
-    controls.style.top = (top - 12) + 'px';
   }
 }
 
@@ -596,13 +580,6 @@ function startResize(e, id, dir) {
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
   window.addEventListener('blur', onUp);
-}
-
-function toggleLock(id) {
-  const block = findBlock(id);
-  block.locked = !block.locked;
-  pushHistory();
-  render();
 }
 
 // copie un bloc (tous ses réglages) juste après l'original dans state.blocks
@@ -786,11 +763,9 @@ function deleteBlock(id) {
 function updateBlockDom(id) {
   const wrapper = canvasEl.querySelector(`.block-wrapper[data-id="${id}"]`);
   if (!wrapper) return;
-  const controls = wrapper.querySelector('.block-controls');
   const frame = wrapper.querySelector('.selection-frame');
   const handles = wrapper.querySelector('.resize-handles');
   wrapper.innerHTML = '';
-  wrapper.appendChild(controls);
   wrapper.appendChild(frame);
   wrapper.appendChild(handles);
   const blocks = getBlocks();
@@ -813,13 +788,244 @@ function updateBlockDom(id) {
 
 // ---------- Panneau de propriétés ----------
 
-// panneau simplifié affiché quand plusieurs blocs sont sélectionnés (Maj+clic) :
-// pas d'édition individuelle des champs (types potentiellement différents),
-// seulement alignement de groupe et suppression
+// navigation par onglets (Contenu / Apparence / Taille & ordre), inspirée
+// des inspecteurs Blender/Unity : un seul groupe de champs affiché à la
+// fois plutôt qu'un accordéon. L'onglet actif est un état de navigation
+// (comme rester sur l'onglet Material en cliquant d'un objet à l'autre dans
+// Blender), pas une préférence — jamais persisté entre rechargements
+let activePropTab = 'Contenu';
+// filtre de recherche du panneau Propriétés (bandeau du haut, façon Blender) :
+// masque les champs du seul onglet actif dont le libellé ne correspond pas —
+// pas d'index global multi-onglets, ça resterait cohérent avec la navigation
+// par onglets plutôt que de la court-circuiter
+let propsSearchQuery = '';
+const PROP_TABS = [
+  { name: 'Contenu', icon: '✎' },
+  { name: 'Apparence', icon: '◐' },
+  { name: 'Taille & ordre', icon: '↔' },
+];
+
+// registre des types de champ "simples" : chacun sait rendre son contrôle et
+// lire sa valeur depuis le DOM. Les couleurs (renderColorField/bindColorField)
+// et les cases seules (rendu en ligne dans renderSchemaField) suivent leur
+// propre chemin, trop différents pour entrer dans ce moule
+const FIELD_KINDS = {
+  text: {
+    continuous: true,
+    control: (field, value) => `<input type="text" id="prop-${field.key}" value="${escapeHtml(value)}">`,
+    read: (input, field) => {
+      if (!field.numeric) return input.value;
+      const n = Number(input.value);
+      return Number.isNaN(n) ? undefined : n; // saisie non numérique : ignorée, valeur précédente conservée
+    },
+  },
+  textarea: {
+    continuous: true,
+    control: (field, value) => `<textarea id="prop-${field.key}">${escapeHtml(value)}</textarea>`,
+    read: (input) => input.value,
+  },
+  'list-items': {
+    continuous: true,
+    control: (field, value) => `<textarea id="prop-${field.key}" placeholder="Un élément par ligne">${escapeHtml(value.join('\n'))}</textarea>`,
+    read: (input) => input.value.split('\n').map(s => s.trim()).filter(Boolean),
+  },
+  'qa-items': {
+    continuous: true,
+    control: (field, value) => `<textarea id="prop-${field.key}" placeholder="Question | Réponse">${escapeHtml(value.map(i => `${i.q} | ${i.a}`).join('\n'))}</textarea>`,
+    // "Question | Réponse" par ligne — le texte après le premier "|" est
+    // repris tel quel (join) pour tolérer une réponse contenant elle-même "|"
+    read: (input) => input.value.split('\n').map(line => {
+      const [q, ...rest] = line.split('|');
+      return { q: (q || '').trim(), a: rest.join('|').trim() };
+    }).filter(item => item.q || item.a),
+  },
+  select: {
+    continuous: false,
+    control: (field, value) => `<select id="prop-${field.key}">${field.options.map(([v, l]) => `<option value="${v}"${String(v) === String(value) ? ' selected' : ''}>${escapeHtml(l)}</option>`).join('')}</select>`,
+    read: (input, field) => {
+      if (!field.numeric) return input.value;
+      const n = Number(input.value);
+      return Number.isNaN(n) ? undefined : n;
+    },
+  },
+  checkbox: {
+    continuous: false,
+    read: (input) => input.checked,
+  },
+};
+
+// rend un champ propre à un type de bloc (PROP_SCHEMAS) : couleur et case à
+// cocher ont leur propre présentation, tout le reste passe par FIELD_KINDS
+function renderSchemaField(field, value) {
+  if (field.type === 'checkbox') {
+    return `<label class="prop-checkbox"><input type="checkbox" id="prop-${field.key}"${value ? ' checked' : ''}> ${escapeHtml(field.label)}</label>`;
+  }
+  if (field.type === 'color') {
+    return renderColorField(field.key, field.label, value, { optional: false });
+  }
+  const kind = FIELD_KINDS[field.type] || FIELD_KINDS.text;
+  return `<div class="prop-field"><label for="prop-${field.key}">${escapeHtml(field.label)}</label>${kind.control(field, value)}</div>`;
+}
+
+// écoute une saisie continue (texte/nombre/liste...) sur "input" et ne pousse
+// l'historique qu'au blur — une frappe = un caractère, pas une entrée
+// d'historique ; une saisie discrète (select/checkbox) pousse immédiatement
+// au "change". Seul point qui décide de ce choix, réutilisé par tous les
+// champs simples (propres au bloc + Apparence/Taille communs). Chaque champ
+// est lié indépendamment (élément absent ou erreur ponctuelle n'affectent
+// que lui) pour qu'un seul champ défaillant ne bloque jamais les autres.
+// resetValue : valeur à réappliquer en cliquant le bouton "×" (chaîne vide
+// par défaut = "auto"/"thème" ; ex. "none" pour le <select> Ombre)
+function bindField({ id, continuous, read, onCommit, resetBtnId, resetValue = '' }) {
+  const input = document.getElementById(id);
+  if (!input) { console.error(`champ introuvable : ${id}`); return; }
+  input.addEventListener(continuous ? 'input' : 'change', () => {
+    try {
+      const value = read(input);
+      if (value === undefined) return; // saisie invalide : ignorée silencieusement
+      onCommit(value);
+      if (!continuous) pushHistory();
+    } catch (err) {
+      console.error(`échec de mise à jour du champ ${id} :`, err);
+    }
+  });
+  if (continuous) input.addEventListener('blur', () => pushHistory());
+  if (resetBtnId) {
+    const resetBtn = document.getElementById(resetBtnId);
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        input.value = resetValue;
+        onCommit(read(input));
+        pushHistory();
+        renderProps();
+      });
+    } else {
+      console.error(`bouton de réinitialisation introuvable : ${resetBtnId}`);
+    }
+  }
+}
+
+function commitFieldValue(block, key, value) {
+  block[key] = value;
+  // "side" change le comportement du wrapper lui-même (classe .pinned,
+  // poignées masquées) — updateBlockDom ne touche que le contenu intérieur,
+  // il faut un render() complet pour que ça se répercute
+  if (key === 'side') render(); else updateBlockDom(block.id);
+}
+
+// glisser horizontalement sur le libellé d'un champ numérique change sa
+// valeur, comme dans Blender/Unity (cliquer-glisser sur le nom du champ
+// plutôt que devoir cliquer dans le champ puis taper) — un simple clic sans
+// mouvement significatif garde le comportement natif du <label> (focus du
+// champ associé) ; Maj+glisser = pas fin (x0.1), comme les deux outils
+function makeLabelScrubbable(label, input, { step = 1, min, max } = {}) {
+  if (!label || !input) return;
+  label.classList.add('prop-label-scrub');
+  label.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const startX = e.clientX;
+    const startValue = Number(input.value) || 0;
+    let dragging = false;
+
+    function onMove(ev) {
+      const dx = ev.clientX - startX;
+      if (!dragging && Math.abs(dx) > 3) {
+        dragging = true;
+        label.classList.add('scrubbing');
+      }
+      if (!dragging) return;
+      const speed = ev.shiftKey ? step * 0.1 : step;
+      let next = startValue + dx * speed;
+      if (min != null) next = Math.max(min, next);
+      if (max != null) next = Math.min(max, next);
+      input.value = Math.round(next);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      label.classList.remove('scrubbing');
+      // le glisser vaut une saisie complète : une seule entrée d'historique,
+      // comme le blur qui suit normalement une frappe au clavier
+      if (dragging) input.dispatchEvent(new Event('blur'));
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// sélecteur natif <input type=color> + champ hexadécimal, synchronisés dans
+// les deux sens ; en mode optionnel (section Apparence), une case "Activer"
+// pilote si block[key] vaut null (pas de surcharge) ou la couleur choisie
+function renderColorField(key, label, value, { optional }) {
+  const enabled = !optional || value != null;
+  const displayValue = value || '#000000';
+  const checkboxHtml = optional ? `<input type="checkbox" id="prop-${key}-enabled"${enabled ? ' checked' : ''}>` : '';
+  return `
+    <div class="prop-field">
+      <label for="prop-${key}${optional ? '-enabled' : ''}">${escapeHtml(label)}</label>
+      <div class="prop-color-row">
+        ${checkboxHtml}
+        <input type="color" id="prop-${key}" value="${displayValue}"${enabled ? '' : ' disabled'}>
+        <input type="text" id="prop-${key}-hex" class="prop-color-hex" value="${enabled ? escapeHtml(displayValue) : ''}" placeholder="#000000" maxlength="7"${enabled ? '' : ' disabled'}>
+      </div>
+    </div>
+  `;
+}
+
+// blocks est toujours un tableau — un seul élément en édition simple,
+// plusieurs en édition groupée (sélection multiple), même chemin pour les
+// deux (voir bindAppearanceFields)
+function bindColorField(blocks, key, { optional }) {
+  const colorInput = document.getElementById(`prop-${key}`);
+  const hexInput = document.getElementById(`prop-${key}-hex`);
+  const checkbox = optional ? document.getElementById(`prop-${key}-enabled`) : null;
+  if (!colorInput || !hexInput || (optional && !checkbox)) { console.error(`champ couleur introuvable : ${key}`); return; }
+  const isActive = () => !optional || checkbox.checked;
+  const applyToAll = (value) => {
+    blocks.forEach(b => { b[key] = value; });
+    blocks.forEach(b => updateBlockDom(b.id));
+  };
+  if (checkbox) {
+    checkbox.addEventListener('change', () => {
+      colorInput.disabled = !checkbox.checked;
+      hexInput.disabled = !checkbox.checked;
+      hexInput.value = checkbox.checked ? colorInput.value : '';
+      applyToAll(checkbox.checked ? colorInput.value : null);
+      pushHistory();
+    });
+  }
+  colorInput.addEventListener('input', () => {
+    if (!isActive()) return;
+    hexInput.value = colorInput.value;
+    applyToAll(colorInput.value);
+  });
+  colorInput.addEventListener('blur', () => pushHistory());
+  hexInput.addEventListener('input', () => {
+    if (!isActive()) return;
+    const v = hexInput.value.trim();
+    if (!HEX_COLOR_RE.test(v)) return; // saisie incomplète en cours de frappe : on ignore silencieusement
+    const expanded = expandHexColor(v);
+    colorInput.value = expanded;
+    applyToAll(expanded);
+  });
+  hexInput.addEventListener('blur', () => pushHistory());
+}
+
+// panneau affiché quand plusieurs blocs sont sélectionnés (Maj+clic) :
+// alignement de groupe + édition groupée de l'Apparence (s'applique à tous
+// les blocs sélectionnés à la fois — édition multi-objets façon Blender/
+// Unity) + suppression. Les champs propres au type (Contenu) et Taille
+// restent en édition individuelle uniquement : trop de blocs de types
+// différents pour qu'un champ commun ait un sens
 function renderMultiSelectProps() {
   propsPanelEl.className = '';
+  const blocks = [...multiSelectIds].map(findBlock).filter(Boolean);
+  const ref = blocks[0];
+  if (!ref) return;
+
   propsPanelEl.innerHTML = `
-    <div class="prop-section-title">${multiSelectIds.size} blocs sélectionnés</div>
+    <div class="prop-section-title prop-section-title-first">${multiSelectIds.size} blocs sélectionnés</div>
     <div class="prop-field-row">
       <button type="button" class="sb-btn" id="alignLeftBtn" title="Aligner à gauche">◧</button>
       <button type="button" class="sb-btn" id="alignCenterHBtn" title="Centrer horizontalement">◫</button>
@@ -830,6 +1036,8 @@ function renderMultiSelectProps() {
       <button type="button" class="sb-btn" id="alignMiddleBtn" title="Centrer verticalement">▤</button>
       <button type="button" class="sb-btn" id="alignBottomBtn" title="Aligner en bas">⬓</button>
     </div>
+    <div class="prop-section-title">Apparence (tous les blocs)</div>
+    ${renderAppearanceFields(ref)}
     <button type="button" class="prop-delete-btn" id="propsDeleteSelectionBtn">Supprimer la sélection</button>
   `;
   const bind = (id, fn) => {
@@ -844,6 +1052,117 @@ function renderMultiSelectProps() {
   bind('alignMiddleBtn', () => alignSelection('middle'));
   bind('alignBottomBtn', () => alignSelection('bottom'));
   bind('propsDeleteSelectionBtn', () => deleteBlocks([...multiSelectIds]));
+
+  bindAppearanceFields(blocks);
+}
+
+// en-tête d'identification (icône + type + aperçu du contenu) : le panneau
+// se limitait avant à une liste de champs sans jamais rappeler quel bloc on
+// est en train d'éditer
+function blockSummaryText(block) {
+  const text = block.text || block.title || block.brand;
+  return text ? String(text).slice(0, 40) : '';
+}
+
+// deux lignes façon Blender : un fil d'Ariane discret (icône + type, comme
+// "Cube" au-dessus du champ de nom), puis une ligne façon champ de nom (fond
+// distinct + icône carrée colorée) montrant un aperçu du contenu du bloc
+function renderPropsHeader(block, def) {
+  const summary = blockSummaryText(block);
+  return `
+    <div class="props-breadcrumb">
+      <span class="props-breadcrumb-icon">${escapeHtml(def.icon)}</span>
+      <span class="props-breadcrumb-label">${escapeHtml(def.label)}</span>
+    </div>
+    <div class="props-name-row">
+      <span class="props-name-icon">${escapeHtml(def.icon)}</span>
+      <span class="props-name-text">${escapeHtml(summary || def.label)}</span>
+    </div>
+  `;
+}
+
+// bande d'onglets verticale, icônes seules — reproduit la colonne de gauche
+// de l'éditeur de propriétés Blender (Objet/Modificateurs/Matériau...) : un
+// seul groupe de champs affiché à la fois plutôt qu'un accordéon unique
+function renderPropTabs() {
+  return `
+    <div class="prop-tabs-v" role="tablist">
+      ${PROP_TABS.map(t => `
+        <button type="button" class="prop-tab-v${activePropTab === t.name ? ' active' : ''}" data-tab="${escapeHtml(t.name)}" role="tab" aria-selected="${activePropTab === t.name}" title="${escapeHtml(t.name)}">
+          <span class="prop-tab-icon">${escapeHtml(t.icon)}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function bindPropTabs() {
+  propsPanelEl.querySelectorAll('.prop-tab-v').forEach(tab => {
+    tab.addEventListener('click', () => {
+      activePropTab = tab.dataset.tab;
+      renderProps();
+    });
+  });
+}
+
+// bandeau de recherche en tête du panneau (voir la barre de recherche de
+// l'éditeur de propriétés Blender) — filtre les champs de l'onglet actif
+// par libellé, en dépliant au passage les sous-groupes Apparence concernés
+// pour qu'un résultat ne reste jamais caché derrière un chevron fermé
+function renderPropsSearchBar() {
+  return `
+    <div class="prop-search-row">
+      <input type="search" id="propsSearch" class="sb-input" placeholder="Rechercher un champ…" value="${escapeHtml(propsSearchQuery)}">
+    </div>
+  `;
+}
+
+function bindPropsSearchBar() {
+  const input = document.getElementById('propsSearch');
+  if (!input) { console.error('élément introuvable : propsSearch'); return; }
+  input.addEventListener('input', () => {
+    propsSearchQuery = input.value;
+    applyPropsSearchFilter();
+  });
+}
+
+function applyPropsSearchFilter() {
+  const panel = propsPanelEl.querySelector('.prop-tab-panel');
+  if (!panel) return;
+  const query = propsSearchQuery.trim().toLowerCase();
+
+  const units = panel.querySelectorAll('.prop-field, .prop-checkbox');
+  units.forEach(unit => {
+    const label = unit.querySelector('label') || unit; // .prop-checkbox est lui-même le label
+    const match = !query || (label.textContent || '').toLowerCase().includes(query);
+    unit.style.display = match ? '' : 'none';
+  });
+
+  // masque un sous-groupe Apparence entier si aucun de ses champs ne
+  // correspond, et déplie les groupes qui contiennent un résultat
+  panel.querySelectorAll('.prop-row-group').forEach(group => {
+    const groupUnits = [...group.querySelectorAll('.prop-field, .prop-checkbox')];
+    const anyMatch = groupUnits.some(u => u.style.display !== 'none');
+    group.style.display = (!query || anyMatch) ? '' : 'none';
+    if (query && anyMatch) {
+      group.querySelector('.prop-row-body').classList.remove('collapsed');
+      const arrow = group.querySelector('.prop-row-arrow');
+      if (arrow) arrow.classList.add('expanded');
+    }
+  });
+
+  let emptyMsg = panel.querySelector('.prop-search-empty');
+  const anyVisible = [...units].some(u => u.style.display !== 'none');
+  if (query && !anyVisible) {
+    if (!emptyMsg) {
+      emptyMsg = document.createElement('p');
+      emptyMsg.className = 'prop-search-empty';
+      emptyMsg.textContent = 'Aucun champ trouvé dans cet onglet.';
+      panel.appendChild(emptyMsg);
+    }
+  } else if (emptyMsg) {
+    emptyMsg.remove();
+  }
 }
 
 function renderProps() {
@@ -858,181 +1177,229 @@ function renderProps() {
   propsPanelEl.className = '';
 
   const schema = PROP_SCHEMAS[block.type];
-  propsPanelEl.innerHTML = schema.map(field => renderPropField(block, field)).join('')
-    + renderAppearanceFields(block)
-    + renderSizeFields(block)
-    + `<button type="button" class="prop-delete-btn" id="propsDeleteBtn">Supprimer ce bloc</button>`;
+  const def = BLOCK_DEFS[block.type];
+  const tabContent = {
+    'Contenu': schema.map(field => renderSchemaField(field, block[field.key])).join(''),
+    'Apparence': renderAppearanceFields(block),
+    'Taille & ordre': renderSizeFields(block),
+  };
 
-  // chaque liaison est indépendante (élément absent ou erreur ponctuelle
-  // ignorés individuellement) pour qu'un seul champ défaillant ne bloque
-  // jamais la liaison des autres champs du panneau
-  // les champs à validation immédiate (select/checkbox, événement "change")
-  // poussent un instantané dès la validation ; les champs à frappe continue
-  // (texte/nombre/couleur, événement "input") ne poussent qu'au blur, sinon
-  // chaque touche créerait sa propre entrée d'historique (Ctrl+Z ne devrait
-  // annuler qu'une modification complète, pas caractère par caractère)
-  schema.forEach(field => {
-    const input = document.getElementById(`prop-${field.key}`);
-    if (!input) { console.error(`champ de propriété introuvable : prop-${field.key}`); return; }
-    const isContinuous = field.type === 'text' || field.type === 'textarea' || field.type === 'list-items' || field.type === 'qa-items';
-    input.addEventListener(isContinuous ? 'input' : 'change', () => {
-      try {
-        if (field.type === 'list-items') {
-          block[field.key] = input.value.split('\n').map(s => s.trim()).filter(Boolean);
-        } else if (field.type === 'qa-items') {
-          // "Question | Réponse" par ligne — le texte après le premier "|"
-          // est repris tel quel (join) pour tolérer une réponse contenant "|"
-          block[field.key] = input.value.split('\n').map(line => {
-            const [q, ...rest] = line.split('|');
-            return { q: (q || '').trim(), a: rest.join('|').trim() };
-          }).filter(item => item.q || item.a);
-        } else if (field.type === 'checkbox') {
-          block[field.key] = input.checked;
-        } else if (field.numeric) {
-          const num = Number(input.value);
-          if (!Number.isNaN(num)) block[field.key] = num;
-        } else {
-          block[field.key] = input.value;
-        }
-        // "side" change le comportement du wrapper lui-même (classe .pinned,
-        // poignées masquées) — updateBlockDom ne touche que le contenu
-        // intérieur, il faut un render() complet pour que ça se répercute
-        if (field.key === 'side') render(); else updateBlockDom(block.id);
-        if (!isContinuous) pushHistory();
-      } catch (err) {
-        console.error(`échec de mise à jour du champ ${field.key} :`, err);
-      }
+  propsPanelEl.innerHTML = renderPropsSearchBar() + `
+    <div class="props-layout">
+      ${renderPropTabs()}
+      <div class="prop-panel-body">
+        ${renderPropsHeader(block, def)}
+        <div class="prop-tab-panel">${tabContent[activePropTab] || tabContent['Contenu']}</div>
+        ${renderPropsActions()}
+      </div>
+    </div>
+  `;
+
+  bindPropsSearchBar();
+  bindPropTabs();
+
+  if (activePropTab === 'Apparence') {
+    bindAppearanceFields([block]);
+  } else if (activePropTab === 'Taille & ordre') {
+    bindField({
+      id: 'prop-width', continuous: true,
+      read: (input) => Math.max(40, Number(input.value) || 400),
+      onCommit: (value) => { block.width = value; updateBlockDom(block.id); },
     });
-    if (isContinuous) input.addEventListener('blur', () => pushHistory());
+    bindField({
+      id: 'prop-height', continuous: true,
+      read: (input) => input.value ? Math.max(20, Number(input.value)) : null,
+      onCommit: (value) => { block.height = value; updateBlockDom(block.id); },
+      resetBtnId: 'prop-height-reset',
+    });
+    bindField({
+      id: 'prop-locked', continuous: false,
+      read: (input) => input.checked,
+      onCommit: (value) => { block.locked = value; render(); },
+    });
+    makeLabelScrubbable(document.querySelector('label[for="prop-width"]'), document.getElementById('prop-width'), { step: 1, min: 40 });
+    makeLabelScrubbable(document.querySelector('label[for="prop-height"]'), document.getElementById('prop-height'), { step: 1, min: 20 });
+  } else {
+    schema.forEach(field => {
+      if (field.type === 'color') { bindColorField([block], field.key, { optional: false }); return; }
+      const kind = FIELD_KINDS[field.type] || FIELD_KINDS.text;
+      bindField({
+        id: `prop-${field.key}`,
+        continuous: kind.continuous,
+        read: (input) => kind.read(input, field),
+        onCommit: (value) => commitFieldValue(block, field.key, value),
+      });
+    });
+  }
+
+  bindPropsActions(block);
+  applyPropsSearchFilter();
+}
+
+// sous-groupes repliables façon Blender (une liste de lignes à chevron —
+// Transform/Relations/Collections... dans l'onglet Objet) : état de repli
+// en mémoire, par session seulement, pas persisté entre rechargements
+const propRowGroupsCollapsed = new Set();
+
+function renderPropRowGroup(name, innerHtml) {
+  const collapsed = propRowGroupsCollapsed.has(name);
+  return `
+    <div class="prop-row-group">
+      <button type="button" class="prop-row-header" data-row-group="${escapeHtml(name)}" aria-expanded="${!collapsed}">
+        <span class="prop-row-arrow${collapsed ? '' : ' expanded'}">▸</span>
+        <span class="prop-row-label">${escapeHtml(name)}</span>
+      </button>
+      <div class="prop-row-body${collapsed ? ' collapsed' : ''}">${innerHtml}</div>
+    </div>
+  `;
+}
+
+// rafraîchit le panneau adapté au mode courant — les groupes repliables
+// étant partagés entre édition simple et groupée, leur clic doit rappeler
+// le bon renderer selon qu'on est en sélection multiple ou non
+function rerenderProps() {
+  if (multiSelectIds.size > 1) renderMultiSelectProps(); else renderProps();
+}
+
+function bindPropRowGroups() {
+  propsPanelEl.querySelectorAll('.prop-row-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const name = header.dataset.rowGroup;
+      if (propRowGroupsCollapsed.has(name)) propRowGroupsCollapsed.delete(name); else propRowGroupsCollapsed.add(name);
+      rerenderProps();
+    });
   });
+}
 
-  bindOptionalColor(block, 'bgColor');
-  bindOptionalColor(block, 'textColor');
-  bindOptionalColor(block, 'borderColor');
-  bindSizeField('prop-radius', (b, value) => { b.radius = value === '' ? null : Math.max(0, Number(value)); });
-  bindSizeField('prop-opacity', (b, value) => { b.opacity = value === '' ? 100 : Math.min(100, Math.max(0, Number(value))); });
+// section Apparence : rendu et liaison communs à l'édition simple (un bloc)
+// et groupée (plusieurs blocs sélectionnés) — "ref" ne préremplit que
+// l'affichage initial, la liaison (bindAppearanceFields) s'applique ensuite
+// à tous les blocs passés. Un point (.prop-modified-dot) + bouton "×"
+// apparaissent sur tout champ qui s'écarte de sa valeur par défaut, comme
+// les champs modifiés dans Unity ; les deux sous-groupes (Couleurs/Effets)
+// reprennent le style "liste de lignes à chevron" des sous-panneaux Blender
+function renderAppearanceFields(ref) {
+  const radiusModified = ref.radius != null;
+  const opacityModified = ref.opacity != null && ref.opacity !== 100;
+  const shadowModified = (ref.shadow || 'none') !== 'none';
+  const dot = '<span class="prop-modified-dot"></span>';
 
-  const shadowSelect = document.getElementById('prop-shadow');
-  if (shadowSelect) {
-    shadowSelect.addEventListener('change', () => {
-      block.shadow = shadowSelect.value;
-      updateBlockDom(block.id);
-      pushHistory();
-    });
-  } else {
-    console.error('champ de propriété introuvable : prop-shadow');
-  }
+  const colorsHtml = `
+    ${renderColorField('bgColor', 'Fond', ref.bgColor, { optional: true })}
+    ${renderColorField('textColor', 'Texte', ref.textColor, { optional: true })}
+    ${renderColorField('borderColor', 'Bordure', ref.borderColor, { optional: true })}
+  `;
 
-  bindSizeField('prop-width', (b, value) => { b.width = Math.max(40, Number(value) || 400); });
-  bindSizeField('prop-height', (b, value) => { b.height = value ? Math.max(20, Number(value)) : null; });
+  const effectsHtml = `
+    <div class="prop-field-row">
+      <div class="prop-field">
+        <label for="prop-radius" class="${radiusModified ? 'is-modified' : ''}">${radiusModified ? dot : ''}Rayon (px)</label>
+        <div class="prop-input-with-reset">
+          <input type="number" id="prop-radius" min="0" placeholder="thème" value="${ref.radius ?? ''}">
+          <button type="button" class="prop-reset-btn" id="prop-radius-reset" title="Revenir au style du thème"${radiusModified ? '' : ' hidden'}>×</button>
+        </div>
+      </div>
+      <div class="prop-field">
+        <label for="prop-opacity" class="${opacityModified ? 'is-modified' : ''}">${opacityModified ? dot : ''}Opacité (%)</label>
+        <div class="prop-input-with-reset">
+          <input type="number" id="prop-opacity" min="0" max="100" value="${ref.opacity ?? 100}">
+          <button type="button" class="prop-reset-btn" id="prop-opacity-reset" title="Revenir à 100%"${opacityModified ? '' : ' hidden'}>×</button>
+        </div>
+      </div>
+    </div>
+    <div class="prop-field">
+      <label for="prop-shadow" class="${shadowModified ? 'is-modified' : ''}">${shadowModified ? dot : ''}Ombre</label>
+      <div class="prop-input-with-reset">
+        <select id="prop-shadow">
+          ${Object.keys(SHADOW_LABELS).map(s => `<option value="${s}"${(ref.shadow || 'none') === s ? ' selected' : ''}>${escapeHtml(SHADOW_LABELS[s])}</option>`).join('')}
+        </select>
+        <button type="button" class="prop-reset-btn" id="prop-shadow-reset" title="Revenir à Aucune"${shadowModified ? '' : ' hidden'}>×</button>
+      </div>
+    </div>
+  `;
 
-  const lockedInput = document.getElementById('prop-locked');
-  if (lockedInput) {
-    lockedInput.addEventListener('change', (e) => {
-      block.locked = e.target.checked;
-      pushHistory();
-      render();
-    });
-  } else {
-    console.error('champ de propriété introuvable : prop-locked');
-  }
+  return renderPropRowGroup('Couleurs', colorsHtml) + renderPropRowGroup('Effets', effectsHtml);
+}
 
+// blocks est toujours un tableau (voir bindColorField) : un seul élément en
+// édition simple (onglet Apparence), plusieurs en édition groupée
+// (panneau multi-sélection) — un seul chemin de liaison pour les deux
+function bindAppearanceFields(blocks) {
+  bindColorField(blocks, 'bgColor', { optional: true });
+  bindColorField(blocks, 'textColor', { optional: true });
+  bindColorField(blocks, 'borderColor', { optional: true });
+  bindField({
+    id: 'prop-radius', continuous: true,
+    read: (input) => input.value === '' ? null : Math.max(0, Number(input.value) || 0),
+    onCommit: (value) => blocks.forEach(b => { b.radius = value; updateBlockDom(b.id); }),
+    resetBtnId: 'prop-radius-reset',
+  });
+  bindField({
+    id: 'prop-opacity', continuous: true,
+    read: (input) => input.value === '' ? 100 : Math.min(100, Math.max(0, Number(input.value) || 0)),
+    onCommit: (value) => blocks.forEach(b => { b.opacity = value; updateBlockDom(b.id); }),
+    resetBtnId: 'prop-opacity-reset',
+  });
+  bindField({
+    id: 'prop-shadow', continuous: false,
+    read: (input) => input.value,
+    onCommit: (value) => blocks.forEach(b => { b.shadow = value; updateBlockDom(b.id); }),
+    resetBtnId: 'prop-shadow-reset',
+    resetValue: 'none',
+  });
+  makeLabelScrubbable(document.querySelector('label[for="prop-radius"]'), document.getElementById('prop-radius'), { step: 1, min: 0 });
+  makeLabelScrubbable(document.querySelector('label[for="prop-opacity"]'), document.getElementById('prop-opacity'), { step: 1, min: 0, max: 100 });
+  bindPropRowGroups();
+}
+
+// même barre Largeur/Hauteur/Verrouillé commune à tous les blocs, indépendamment
+// de leur type — les actions (dupliquer/ordre/supprimer) vivent dans
+// renderPropsActions, toujours visibles sous les onglets
+function renderSizeFields(block) {
+  const heightModified = block.height != null;
+  return `
+    <div class="prop-field-row">
+      <div class="prop-field"><label for="prop-width">Largeur (px)</label><input type="number" id="prop-width" min="40" value="${block.width || 400}"></div>
+      <div class="prop-field">
+        <label for="prop-height" class="${heightModified ? 'is-modified' : ''}">${heightModified ? '<span class="prop-modified-dot"></span>' : ''}Hauteur (px)</label>
+        <div class="prop-input-with-reset">
+          <input type="number" id="prop-height" min="20" placeholder="auto" value="${block.height || ''}">
+          <button type="button" class="prop-reset-btn" id="prop-height-reset" title="Revenir à la hauteur automatique"${heightModified ? '' : ' hidden'}>×</button>
+        </div>
+      </div>
+    </div>
+    <label class="prop-checkbox"><input type="checkbox" id="prop-locked"${block.locked ? ' checked' : ''}> Verrouillé (position et taille figées)</label>
+  `;
+}
+
+// actions de bloc (dupliquer, ordre d'empilement, supprimer) regroupées en
+// bas du panneau, en dehors des sections repliables — toujours visibles
+function renderPropsActions() {
+  return `
+    <div class="prop-actions">
+      <button type="button" class="sb-btn" id="propsDuplicateBtn">⧉ Dupliquer</button>
+      <div class="prop-field-row">
+        <button type="button" class="sb-btn" id="propsFrontBtn">Premier plan</button>
+        <button type="button" class="sb-btn" id="propsBackBtn">Arrière-plan</button>
+      </div>
+      <button type="button" class="prop-delete-btn" id="propsDeleteBtn">Supprimer ce bloc</button>
+    </div>
+  `;
+}
+
+function bindPropsActions(block) {
+  const dupBtn = document.getElementById('propsDuplicateBtn');
+  if (dupBtn) dupBtn.addEventListener('click', () => duplicateBlock(block.id));
+  else console.error('élément introuvable : propsDuplicateBtn');
   const frontBtn = document.getElementById('propsFrontBtn');
   if (frontBtn) frontBtn.addEventListener('click', () => bringToFront(block.id));
   else console.error('élément introuvable : propsFrontBtn');
   const backBtn = document.getElementById('propsBackBtn');
   if (backBtn) backBtn.addEventListener('click', () => sendToBack(block.id));
   else console.error('élément introuvable : propsBackBtn');
-
   const deleteBtn = document.getElementById('propsDeleteBtn');
   if (deleteBtn) deleteBtn.addEventListener('click', () => deleteBlock(block.id));
   else console.error('élément introuvable : propsDeleteBtn');
-
-  function bindSizeField(id, apply) {
-    const input = document.getElementById(id);
-    if (!input) { console.error(`champ de taille introuvable : ${id}`); return; }
-    input.addEventListener('blur', () => pushHistory());
-    input.addEventListener('input', (e) => {
-      try {
-        apply(block, e.target.value);
-        updateBlockDom(block.id);
-      } catch (err) {
-        console.error(`échec de mise à jour de ${id} :`, err);
-      }
-    });
-  }
-
-  // case "Activer" + sélecteur de couleur : la case pilote si block[key] vaut
-  // null (pas de surcharge) ou la couleur choisie
-  function bindOptionalColor(b, key) {
-    const checkbox = document.getElementById(`prop-${key}-enabled`);
-    const colorInput = document.getElementById(`prop-${key}`);
-    if (!checkbox || !colorInput) { console.error(`champ couleur introuvable : ${key}`); return; }
-    checkbox.addEventListener('change', () => {
-      colorInput.disabled = !checkbox.checked;
-      b[key] = checkbox.checked ? colorInput.value : null;
-      updateBlockDom(b.id);
-      pushHistory();
-    });
-    colorInput.addEventListener('input', () => {
-      if (!checkbox.checked) return;
-      b[key] = colorInput.value;
-      updateBlockDom(b.id);
-    });
-    colorInput.addEventListener('blur', () => pushHistory());
-  }
-}
-
-// section Apparence (couleurs, rayon, ombre, opacité) commune à tous les
-// blocs, indépendamment de leur type
-function renderAppearanceFields(block) {
-  return `
-    <div class="prop-section-title">Apparence</div>
-    ${renderOptionalColor(block, 'bgColor', 'Fond')}
-    ${renderOptionalColor(block, 'textColor', 'Texte')}
-    ${renderOptionalColor(block, 'borderColor', 'Bordure')}
-    <div class="prop-field-row">
-      <div class="prop-field"><label>Rayon (px)</label><input type="number" id="prop-radius" min="0" placeholder="thème" value="${block.radius ?? ''}"></div>
-      <div class="prop-field"><label>Opacité (%)</label><input type="number" id="prop-opacity" min="0" max="100" value="${block.opacity ?? 100}"></div>
-    </div>
-    <div class="prop-field">
-      <label>Ombre</label>
-      <select id="prop-shadow">
-        ${Object.keys(SHADOW_LABELS).map(s => `<option value="${s}"${(block.shadow || 'none') === s ? ' selected' : ''}>${escapeHtml(SHADOW_LABELS[s])}</option>`).join('')}
-      </select>
-    </div>
-  `;
-}
-
-function renderOptionalColor(block, key, label) {
-  const enabled = block[key] != null;
-  const value = block[key] || '#000000';
-  return `
-    <div class="prop-field">
-      <label>${escapeHtml(label)}</label>
-      <div class="prop-color-row">
-        <input type="checkbox" id="prop-${key}-enabled"${enabled ? ' checked' : ''}>
-        <input type="color" id="prop-${key}" value="${value}"${enabled ? '' : ' disabled'}>
-      </div>
-    </div>
-  `;
-}
-
-// même barre Largeur/Hauteur/Verrouillé/ordre d'empilement pour tous les
-// blocs, indépendamment de leur type — s'affiche en plus des champs propres
-// au type (schema) et de la section Apparence
-function renderSizeFields(block) {
-  return `
-    <div class="prop-field-row">
-      <div class="prop-field"><label>Largeur (px)</label><input type="number" id="prop-width" min="40" value="${block.width || 400}"></div>
-      <div class="prop-field"><label>Hauteur (px)</label><input type="number" id="prop-height" min="20" placeholder="auto" value="${block.height || ''}"></div>
-    </div>
-    <label class="prop-checkbox"><input type="checkbox" id="prop-locked"${block.locked ? ' checked' : ''}> Verrouillé (position et taille figées)</label>
-    <div class="prop-field-row">
-      <button type="button" class="sb-btn" id="propsFrontBtn">Premier plan</button>
-      <button type="button" class="sb-btn" id="propsBackBtn">Arrière-plan</button>
-    </div>
-  `;
 }
 
 // déplace le bloc en fin/début de state.blocks — l'ordre du tableau pilote
@@ -1067,30 +1434,6 @@ function syncSizeFields(block) {
   if (heightInput) heightInput.value = block.height || '';
 }
 
-function renderPropField(block, field) {
-  const value = block[field.key];
-  if (field.type === 'list-items') {
-    return `<div class="prop-field"><label>${escapeHtml(field.label)}</label><textarea id="prop-${field.key}" placeholder="Un élément par ligne">${escapeHtml(value.join('\n'))}</textarea></div>`;
-  }
-  if (field.type === 'qa-items') {
-    const text = value.map(i => `${i.q} | ${i.a}`).join('\n');
-    return `<div class="prop-field"><label>${escapeHtml(field.label)}</label><textarea id="prop-${field.key}" placeholder="Question | Réponse">${escapeHtml(text)}</textarea></div>`;
-  }
-  if (field.type === 'textarea') {
-    return `<div class="prop-field"><label>${escapeHtml(field.label)}</label><textarea id="prop-${field.key}">${escapeHtml(value)}</textarea></div>`;
-  }
-  if (field.type === 'select') {
-    const opts = field.options.map(([v, l]) => `<option value="${v}"${String(v) === String(value) ? ' selected' : ''}>${escapeHtml(l)}</option>`).join('');
-    return `<div class="prop-field"><label>${escapeHtml(field.label)}</label><select id="prop-${field.key}">${opts}</select></div>`;
-  }
-  if (field.type === 'color') {
-    return `<div class="prop-field"><label>${escapeHtml(field.label)}</label><input type="color" id="prop-${field.key}" value="${escapeHtml(value)}"></div>`;
-  }
-  if (field.type === 'checkbox') {
-    return `<label class="prop-checkbox"><input type="checkbox" id="prop-${field.key}"${value ? ' checked' : ''}> ${escapeHtml(field.label)}</label>`;
-  }
-  return `<div class="prop-field"><label>${escapeHtml(field.label)}</label><input type="text" id="prop-${field.key}" value="${escapeHtml(value)}"></div>`;
-}
 
 // ---------- Historique (annuler/rétablir) ----------
 
