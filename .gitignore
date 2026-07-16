@@ -1,2 +1,5 @@
 node_modules/
 backend/db/*.json
+
+# config locale de l'assistant, spécifique à cette machine
+.claude/
